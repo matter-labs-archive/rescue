@@ -5,7 +5,8 @@ use franklin_crypto::circuit::{
     uint32::UInt32,
     multieq::MultiEq,
     boolean::Boolean,
-    num::AllocatedNum,
+    num::*,
+    expression::Expression,
     Assignment
 };
 use franklin_crypto::bellman::{
@@ -16,7 +17,6 @@ use franklin_crypto::bellman::{
     Variable,
     pairing::ff::{
         Field,
-        SqrtField,
         PrimeField,
         PrimeFieldRepr,
         BitIterator
@@ -30,48 +30,60 @@ const M_VEC_SIZE:usize=16;
 pub fn rescue_round_function<CS,E>(
     mut cs: CS,
     current_hash_value: [AllocatedNum<E>;M_VEC_SIZE],
-    input_as_key:&[[AllocatedNum<E>;M_VEC_SIZE];N_ITERATIONS]
+    input_as_key:&[[AllocatedNum<E>;M_VEC_SIZE];N_ITERATIONS*2+1]
 )  -> Result<[AllocatedNum<E>;M_VEC_SIZE], SynthesisError>
     where CS: ConstraintSystem<E>,E:Engine
 {
     let alpha=get_alpha::<E::Fr>();
-    let mut state=add_key(cs.namespace(||"initial state"),current_hash_value,&input_as_key[0])?;
+    let mut state=vec![];
+    for i in 0..M_VEC_SIZE{
+        state.push(Expression::from(&current_hash_value[i]));
+    }
+    state=add_key(state,&input_as_key[0])?;
     for r in 1..=N_ITERATIONS{
         let mut cs=cs.namespace(|| format!("iteration{}",r));
         for i in 0..M_VEC_SIZE{
-            state[i]=generate_powers(cs.namespace(|| format!("power{}",i)), &state[i], &alpha)?;
+            let mut cs=cs.namespace(|| format!("power{}",i));
+            let before=state[i].into_number(&mut cs)?;
+            let after=generate_powers(&mut cs, &before, &alpha)?;
+            state[i]=Expression::from(&after);
         }
         state=generate_mds(cs.namespace(||"MDS1"), state)?;
-        state=add_key(cs.namespace(||"AddKey1"), state, &input_as_key[r*2-1])?;
+        state=add_key(state, &input_as_key[r*2-1])?;
         for i in 0..M_VEC_SIZE{
-            state[i]=generate_roots(cs.namespace(|| format!("root{}",i)), &state[i], &alpha)?;
+            let mut cs=cs.namespace(|| format!("root{}",i));
+            let before=state[i].into_number(&mut cs)?;
+            let after=generate_roots(&mut cs, &before, &alpha)?;
+            state[i]=Expression::from(&after);
         }
         state=generate_mds(cs.namespace(||"MDS2"), state)?;
-        state=add_key(cs.namespace(||"AddKey1"), state, &input_as_key[r*2])?;
+        state=add_key(state, &input_as_key[r*2])?;
     }
-    Ok(state)
+    let mut res=current_hash_value;
+    for i in 0..M_VEC_SIZE{
+        res[i]=state[i].into_number(cs.namespace(|| format!("result{}",i)))?;
+    }
+    Ok(res)
 }
-fn add_key<CS,E>(
-    mut cs: CS,
-    input: [AllocatedNum<E>;M_VEC_SIZE],
+fn add_key<E:Engine>(
+    input: Vec<Expression<E>>,
     key: &[AllocatedNum<E>;M_VEC_SIZE]
-)  -> Result<[AllocatedNum<E>;M_VEC_SIZE], SynthesisError>
-    where CS: ConstraintSystem<E>,E:Engine
+)  -> Result<Vec<Expression<E>>, SynthesisError>
 {
-    let mut output:[_;M_VEC_SIZE]=input;
-    //ToDo: implement this transformation
-    //for i in 0..M_VEC_SIZE{
-    //    output[i] = input[i].add(cs.namespace(||format!("add{}",i)), &key[i])?;
-    //}
+    let mut output=vec![];
+    for i in 0..M_VEC_SIZE{
+        let expr_key=Expression::from(&key[i]);
+        output.push(input[i].clone() + expr_key);
+    }
     Ok(output)
 }
 fn generate_mds<CS,E>(
     mut cs: CS,
-    input: [AllocatedNum<E>;M_VEC_SIZE]
-)  -> Result<[AllocatedNum<E>;M_VEC_SIZE], SynthesisError>
+    input: Vec<Expression<E>>
+)  -> Result<Vec<Expression<E>>, SynthesisError>
     where CS: ConstraintSystem<E>,E:Engine
 {
-    let mut output:[_;M_VEC_SIZE]=input;
+    let mut output=input;
     //ToDo: implement this transformation
     Ok(output)
 }
@@ -260,7 +272,7 @@ mod test {
         circuit::test::TestConstraintSystem,
         bellman::pairing::{
             bn256::{Bn256, Fr},
-            ff::{Field, PrimeField}
+            ff::PrimeField
         }
     };
     use super::*;
@@ -285,9 +297,10 @@ mod test {
             assert_eq!(big_a*x + big_b*y,big_d);
         }
     }
+    #[test]
     fn test_gcd2(){
-        for a in 1..1000{
-            for b in 1..1000{
+        for a in 1..100{
+            for b in 1..100{
                 let big_a=ToBigInt::to_bigint(&a).unwrap();
                 let big_b=ToBigInt::to_bigint(&b).unwrap();
                 let zero=ToBigInt::to_bigint(&0).unwrap();
@@ -297,8 +310,7 @@ mod test {
                 assert_eq!(&big_a*&x + &big_b*&y,res_d.clone());
                 let (res_d1,(x1,y1)) = gcd(&big_b, &big_a);
                 assert_eq!(res_d,res_d1);
-                assert_eq!(x,y1);
-                assert_eq!(y,x1);
+                assert_eq!(&big_b*&x1 + &big_a*&y1,res_d.clone());
             }
         }
     }

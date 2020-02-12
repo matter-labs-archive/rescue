@@ -124,8 +124,18 @@ fn generate_mul_matrix_vector<CS,E>(
 )  -> Result<Vec<Expression<E>>, SynthesisError>
     where CS: ConstraintSystem<E>,E:Engine
 {
-    let mut output=vector;
-    //ToDo: implement this transformation
+    let mut output=vec![];
+    for row in matrix{
+        let mut res=Expression::constant::<CS>(E::Fr::zero());
+        for (i,element) in row.iter().enumerate(){
+            // I am not sure if I implement this correctly
+            let mut val=vector[i].get_value().unwrap();
+            val.mul_assign(element);
+            let lin_comb=LinearCombination::<E>::zero() + (element.clone(), &vector[i].lc());
+            res=res + Expression::new(Some(val),lin_comb);
+        }
+        output.push(res);
+    }
     Ok(output)
 }
 

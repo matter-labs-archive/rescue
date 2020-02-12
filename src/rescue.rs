@@ -23,15 +23,48 @@ use franklin_crypto::bellman::{
     }
 };
 
+pub fn rescue_hash<E, CS>(
+    mut cs: CS,
+    mut input: Vec<Expression<E>>
+) -> Result<Vec<Expression<E>>, SynthesisError>
+    where E: Engine, CS: ConstraintSystem<E>
+{
+    //maybe, this value will be calculated
+    //but it is constant for the algorithm
+    let m_vecsize=7 as usize;
+    let key_size={
+        let mut n=(E::Fr::CAPACITY/2+1) as usize;
+        if n<10 {n=10}
+        n*2+1
+    };
+
+    while (input.len() % (key_size*m_vecsize)) != 0{
+        input.push(Expression::constant::<CS>(E::Fr::zero()));
+    }
+
+    // Maybe some initial vector will be needed
+    let mut hash=vec![Expression::constant::<CS>(E::Fr::zero());m_vecsize];
+
+    let alpha=get_alpha::<E::Fr>();
+    for (i,block) in input.chunks(key_size*m_vecsize).map(|a| a.to_vec()).enumerate(){
+        assert_eq!(block.len(),key_size*m_vecsize);
+        let mut key=vec![];
+        for k in block.chunks(m_vecsize).map(|a| a.to_vec()){
+            key.push(k);
+        }
+        hash=rescue_round_function(cs.namespace(||format!("processing_block_{}",i)), hash, &key, &alpha)?;
+    }
+    Ok(hash)
+}
 
 pub fn rescue_round_function<CS,E>(
     mut cs: CS,
     initial_hash_value: Vec<Expression<E>>,
-    input_as_key:&Vec<Vec<AllocatedNum<E>>>
+    input_as_key:&Vec<Vec<Expression<E>>>,
+    alpha: &E::Fr
 )  -> Result<Vec<Expression<E>>, SynthesisError>
     where CS: ConstraintSystem<E>,E:Engine
 {
-    let alpha=get_alpha::<E::Fr>();
     let mds=get_mds_matrix::<E::Fr>(initial_hash_value.len())?;
     assert_eq!(input_as_key.len()%2,1);
     let n_iter=(input_as_key.len()-1)/2;
@@ -42,7 +75,7 @@ pub fn rescue_round_function<CS,E>(
         for i in 0..hash_value.len(){
             let mut cs=cs.namespace(|| format!("power{}",i));
             let before=hash_value[i].into_number(&mut cs)?;
-            let after=generate_powers(&mut cs, &before, &alpha)?;
+            let after=generate_powers(&mut cs, &before, alpha)?;
             hash_value[i]=Expression::from(&after);
         }
         hash_value=generate_mul_matrix_vector(cs.namespace(||"MDS1"),&mds, hash_value)?;
@@ -50,7 +83,7 @@ pub fn rescue_round_function<CS,E>(
         for i in 0..hash_value.len(){
             let mut cs=cs.namespace(|| format!("root{}",i));
             let before=hash_value[i].into_number(&mut cs)?;
-            let after=generate_roots(&mut cs, &before, &alpha)?;
+            let after=generate_roots(&mut cs, &before, alpha)?;
             hash_value[i]=Expression::from(&after);
         }
         hash_value=generate_mul_matrix_vector(cs.namespace(||"MDS2"),&mds, hash_value)?;
@@ -60,13 +93,12 @@ pub fn rescue_round_function<CS,E>(
 }
 fn add_key<E:Engine>(
     input: Vec<Expression<E>>,
-    key: &Vec<AllocatedNum<E>>
+    key: &Vec<Expression<E>>
 )  -> Result<Vec<Expression<E>>, SynthesisError>
 {
     let mut output=vec![];
     for i in 0..input.len(){
-        let expr_key=Expression::from(&key[i]);
-        output.push(input[i].clone() + expr_key);
+        output.push(input[i].clone() + key[i].clone());
     }
     Ok(output)
 }
@@ -128,11 +160,15 @@ fn generate_mul_matrix_vector<CS,E>(
     for row in matrix{
         let mut res=Expression::constant::<CS>(E::Fr::zero());
         for (i,element) in row.iter().enumerate(){
-            // I am not sure if I implement this correctly
-            let mut val=vector[i].get_value().unwrap();
-            val.mul_assign(element);
+            let val=match vector[i].get_value() {
+                Some(mut curval) => {
+                    curval.mul_assign(&element);    
+                    Some(curval)
+                }
+                _ => None,
+            };
             let lin_comb=LinearCombination::<E>::zero() + (element.clone(), &vector[i].lc());
-            res=res + Expression::new(Some(val),lin_comb);
+            res=res + Expression::new(val,lin_comb);
         }
         output.push(res);
     }

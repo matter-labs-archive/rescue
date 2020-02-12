@@ -23,67 +23,108 @@ use franklin_crypto::bellman::{
     }
 };
 
-//ToDo: choose these constants
-const N_ITERATIONS:usize=16;
-const M_VEC_SIZE:usize=16;
 
 pub fn rescue_round_function<CS,E>(
     mut cs: CS,
-    current_hash_value: [AllocatedNum<E>;M_VEC_SIZE],
-    input_as_key:&[[AllocatedNum<E>;M_VEC_SIZE];N_ITERATIONS*2+1]
-)  -> Result<[AllocatedNum<E>;M_VEC_SIZE], SynthesisError>
+    initial_hash_value: Vec<Expression<E>>,
+    input_as_key:&Vec<Vec<AllocatedNum<E>>>
+)  -> Result<Vec<Expression<E>>, SynthesisError>
     where CS: ConstraintSystem<E>,E:Engine
 {
     let alpha=get_alpha::<E::Fr>();
-    let mut state=vec![];
-    for i in 0..M_VEC_SIZE{
-        state.push(Expression::from(&current_hash_value[i]));
-    }
-    state=add_key(state,&input_as_key[0])?;
-    for r in 1..=N_ITERATIONS{
+    let mds=get_mds_matrix::<E::Fr>(initial_hash_value.len())?;
+    assert_eq!(input_as_key.len()%2,1);
+    let n_iter=(input_as_key.len()-1)/2;
+    let mut hash_value=initial_hash_value;
+    hash_value=add_key(hash_value,&input_as_key[0])?;
+    for r in 1..=n_iter{
         let mut cs=cs.namespace(|| format!("iteration{}",r));
-        for i in 0..M_VEC_SIZE{
+        for i in 0..hash_value.len(){
             let mut cs=cs.namespace(|| format!("power{}",i));
-            let before=state[i].into_number(&mut cs)?;
+            let before=hash_value[i].into_number(&mut cs)?;
             let after=generate_powers(&mut cs, &before, &alpha)?;
-            state[i]=Expression::from(&after);
+            hash_value[i]=Expression::from(&after);
         }
-        state=generate_mds(cs.namespace(||"MDS1"), state)?;
-        state=add_key(state, &input_as_key[r*2-1])?;
-        for i in 0..M_VEC_SIZE{
+        hash_value=generate_mul_matrix_vector(cs.namespace(||"MDS1"),&mds, hash_value)?;
+        hash_value=add_key(hash_value, &input_as_key[r*2-1])?;
+        for i in 0..hash_value.len(){
             let mut cs=cs.namespace(|| format!("root{}",i));
-            let before=state[i].into_number(&mut cs)?;
+            let before=hash_value[i].into_number(&mut cs)?;
             let after=generate_roots(&mut cs, &before, &alpha)?;
-            state[i]=Expression::from(&after);
+            hash_value[i]=Expression::from(&after);
         }
-        state=generate_mds(cs.namespace(||"MDS2"), state)?;
-        state=add_key(state, &input_as_key[r*2])?;
+        hash_value=generate_mul_matrix_vector(cs.namespace(||"MDS2"),&mds, hash_value)?;
+        hash_value=add_key(hash_value, &input_as_key[r*2])?;
     }
-    let mut res=current_hash_value;
-    for i in 0..M_VEC_SIZE{
-        res[i]=state[i].into_number(cs.namespace(|| format!("result{}",i)))?;
-    }
-    Ok(res)
+    Ok(hash_value)
 }
 fn add_key<E:Engine>(
     input: Vec<Expression<E>>,
-    key: &[AllocatedNum<E>;M_VEC_SIZE]
+    key: &Vec<AllocatedNum<E>>
 )  -> Result<Vec<Expression<E>>, SynthesisError>
 {
     let mut output=vec![];
-    for i in 0..M_VEC_SIZE{
+    for i in 0..input.len(){
         let expr_key=Expression::from(&key[i]);
         output.push(input[i].clone() + expr_key);
     }
     Ok(output)
 }
-fn generate_mds<CS,E>(
+fn get_mds_matrix<F:PrimeField>(m:usize)->Result<Vec<Vec<F>>,SynthesisError>{
+    //https://eprint.iacr.org/2019/458.pdf pages 9-10 contain the description
+    let zero=ToBigInt::to_bigint(&0).unwrap();
+    let p=prime_modulus::<F>();
+    let x={
+        //the only requirements are
+        // x_i != x_j and 
+        // m - log2(m) most significant bits are zero
+        // This will satisfy
+        let mut res=vec![];
+
+        for i in 1..=m{
+            res.push(ToBigInt::to_bigint(&i).unwrap());
+        }
+        res
+    };
+    //the only requirement is
+    // m - log2(m) most significant bits are non-zero
+    // This will satisfy
+    let r= &p - ToBigInt::to_bigint(&m).unwrap();
+
+    let y={
+        let mut res=vec![];
+        for i in 1..=m{
+            res.push((&x[i] + &r) % &p);
+        }
+        res
+    };
+    //Building Cauchy matrix
+    let mut res=vec![];
+    for i in 1..=m{
+        let mut line=vec![];
+        for j in 1..=m{
+            let element_inv=(&x[i] + &y[j]) % &p;
+            let element={
+                let (_,(mut el,_))=gcd(&element_inv.clone(),&p);
+                while el.clone()<zero.clone() {
+                    el+=&p;
+                }
+                el
+            } % &p;
+            line.push(bigint_to_fr(element).unwrap());
+        }
+        res.push(line);
+    }
+    Ok(res)
+}
+fn generate_mul_matrix_vector<CS,E>(
     mut cs: CS,
-    input: Vec<Expression<E>>
+    matrix: &Vec<Vec<E::Fr>>,
+    vector: Vec<Expression<E>>
 )  -> Result<Vec<Expression<E>>, SynthesisError>
     where CS: ConstraintSystem<E>,E:Engine
 {
-    let mut output=input;
+    let mut output=vector;
     //ToDo: implement this transformation
     Ok(output)
 }

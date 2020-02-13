@@ -39,7 +39,8 @@ pub fn rescue_hash<E, CS>(
     let input_expressions={
         let mut data=vec![];
         for (i,block) in input_booleans.chunks(E::Fr::CAPACITY as usize).enumerate(){
-            let field_element=AllocatedNum::<E>::pack_bits_to_element(cs.namespace(||format!("input_{}",i)),block)?;
+            let field_element=AllocatedNum::<E>::pack_bits_to_element(
+                cs.namespace(||format!("input_{}",i)),block)?;
             data.push(Expression::from(&field_element));
         }
         data
@@ -117,10 +118,10 @@ fn generate_rescue_round_function<CS,E>(
         for i in 0..hash_value.len(){
             let mut cs=cs.namespace(|| format!("power{}",i));
             let before=hash_value[i].into_number(&mut cs)?;
-            let after=generate_powers(&mut cs, &before, alpha)?;
+            let after=before.pow(&mut cs, alpha)?;
             hash_value[i]=Expression::from(&after);
         }
-        hash_value=generate_mul_matrix_vector(cs.namespace(||"MDS1"),&mds, hash_value)?;
+        hash_value=generate_mul_matrix_vector(&mut cs,&mds, hash_value)?;
         hash_value=add_key(hash_value, &input_as_key[r*2-1])?;
         for i in 0..hash_value.len(){
             let mut cs=cs.namespace(|| format!("root{}",i));
@@ -128,7 +129,7 @@ fn generate_rescue_round_function<CS,E>(
             let after=generate_roots(&mut cs, &before, alpha)?;
             hash_value[i]=Expression::from(&after);
         }
-        hash_value=generate_mul_matrix_vector(cs.namespace(||"MDS2"),&mds, hash_value)?;
+        hash_value=generate_mul_matrix_vector(&mut cs,&mds, hash_value)?;
         hash_value=add_key(hash_value, &input_as_key[r*2])?;
     }
     Ok(hash_value)
@@ -145,7 +146,8 @@ fn add_key<E:Engine>(
     Ok(output)
 }
 pub fn get_mds_matrix<F:PrimeField>(m:usize)->Result<Vec<Vec<F>>,SynthesisError>{
-    //https://eprint.iacr.org/2019/458.pdf pages 9-10 contain the description
+    // https://eprint.iacr.org/2019/458.pdf 
+    // pages 9-10 contain the description
     let zero=ToBigInt::to_bigint(&0).unwrap();
     let p=prime_modulus::<F>();
     let x={
@@ -216,39 +218,6 @@ fn generate_mul_matrix_vector<CS,E>(
     Ok(output)
 }
 
-fn generate_powers<CS,E>(
-    mut cs: CS,
-    x: &AllocatedNum<E>,
-    alpha: &E::Fr
-) -> Result<AllocatedNum<E>, SynthesisError>
-    where CS: ConstraintSystem<E>,E:Engine
-{
-        assert_ne!(*alpha,E::Fr::zero());
-        assert_ne!(*alpha,E::Fr::one());
-        let alpha_bits_be = get_bits_be(alpha);
-        let squares={//define square, square of square, etc variables
-            let mut tmp:Vec<AllocatedNum<E>>=vec![x.clone()];
-            //alpha is constant
-            for i in 1..alpha_bits_be.len(){
-                let sqr=tmp.last().unwrap().square(cs.namespace(|| format!("sqr{}",i)))?;
-                tmp.push(sqr);
-            }
-            tmp
-        };
-        assert_eq!(squares.len(),alpha_bits_be.len());
-        let res={
-            let n=alpha_bits_be.len();
-            let mut tmp=squares[n-1].clone();
-            //alpha is constant
-            for i in 1..n{
-                if alpha_bits_be[i] {
-                    tmp=squares[n-1-i].mul(cs.namespace(|| format!("mul_due_to_bit{}",i)),&tmp)?;
-                }
-            }
-            tmp.clone()
-        };
-        Ok(res) 
-}
 fn generate_roots<CS,E>(
     mut cs: CS,
     x: &AllocatedNum<E>,
@@ -441,48 +410,6 @@ mod test {
             }
         }
     }
-    #[test]
-    fn power_test() {
-        let values=vec![
-            // x, a, x^a, constraints
-            ("1","2","1",1),
-            ("1","3","1",2),
-            ("1","4","1",2),
-            ("1","5","1",3),
-            ("1","6","1",3),
-            ("1","7","1",4),
-
-            ("2","2","4",1),
-            ("2","3","8",2),
-            ("2","4","16",2),
-            ("2","5","32",3),
-            ("2","6","64",3),
-            ("2","7","128",4),
-
-            ("3","2","9",1),
-            ("3","3","27",2),
-            ("3","4","81",2),
-            ("3","5","243",3),
-            ("3","6","729",3),
-            ("3","7","2187",4)
-        ];
-        for (x_s,a_s,y_s,n) in values{
-            let mut cs = TestConstraintSystem::<Bn256>::new();
-            let x = AllocatedNum::alloc(&mut cs, || Ok(Fr::from_str(&x_s[..]).unwrap()) ).unwrap();
-            let a = Fr::from_str(&a_s[..]).unwrap();
-            let y = generate_powers(&mut cs,&x,&a).unwrap();
-
-            let xx= fr_to_bigint(x.get_value().unwrap().clone());
-            let yy= fr_to_bigint(y.get_value().unwrap().clone());
-            let k=fr_to_bigint(a);
-            assert_eq!(xx.modpow(&k,&prime_modulus::<Fr>()),yy.clone());
-
-            assert!(cs.is_satisfied());
-            assert_eq!(cs.num_constraints(),n);
-            assert_eq!(y.get_value().unwrap(),Fr::from_str(&y_s[..]).unwrap());
-        }
-    }
-
     #[test]
     fn alpha_test(){
         let alpha=get_alpha::<Fr>();

@@ -1,20 +1,17 @@
 extern crate num_bigint;
 extern crate franklin_crypto;
+extern crate rand;
 use num_bigint::{BigInt,ToBigInt,Sign};
 use franklin_crypto::circuit::{
-    uint32::UInt32,
-    multieq::MultiEq,
-    boolean::Boolean,
+    boolean::*,
     num::*,
     expression::Expression,
-    Assignment
 };
 use franklin_crypto::bellman::{
     ConstraintSystem, 
     SynthesisError,
     pairing::Engine,
     LinearCombination,
-    Variable,
     pairing::ff::{
         Field,
         PrimeField,
@@ -56,7 +53,7 @@ pub fn rescue_hash<E, CS>(
     let output_booleans = {
         let mut data=vec![];
         for (i,num) in output_numbers.iter().enumerate(){
-            let bits=num.into_bits_le(cs.namespace(||format!("output_{}",i)))?;
+            let bits=num.into_bits_le(cs.namespace(||format!("output_bits_{}",i)))?;
             for bit in bits.iter().rev(){
                 data.push(bit.clone());
             }
@@ -168,16 +165,16 @@ pub fn get_mds_matrix<F:PrimeField>(m:usize)->Result<Vec<Vec<F>>,SynthesisError>
 
     let y={
         let mut res=vec![];
-        for i in 1..=m{
+        for i in 0..m{
             res.push((&x[i] + &r) % &p);
         }
         res
     };
     //Building Cauchy matrix
     let mut res=vec![];
-    for i in 1..=m{
+    for i in 0..m{
         let mut line=vec![];
-        for j in 1..=m{
+        for j in 0..m{
             let element_inv=(&x[i] + &y[j]) % &p;
             let element={
                 let (_,(mut el,_))=gcd(&element_inv.clone(),&p);
@@ -372,6 +369,13 @@ mod test {
         }
     };
     use super::*;
+    use franklin_crypto::circuit::{
+        boolean::*,
+        num::*,
+        expression::Expression,
+    };
+    
+    use rand::{XorShiftRng, SeedableRng, Rng};
 
     #[test]
     fn test_gcd(){
@@ -433,4 +437,26 @@ mod test {
         }
     }
 
+
+    #[test]
+    fn test_full_block() {
+        let mut rng = XorShiftRng::from_seed([0x5dbe6259, 0x8d313d76, 0x3237db17, 0xe5bc0654]);
+
+        let mut cs = TestConstraintSystem::<Bn256>::new();
+        let input_bits: Vec<_> = (0..2048).map(|i| {
+            Boolean::from(
+                AllocatedBit::alloc(
+                    cs.namespace(|| format!("input bit {}", i)),
+                    Some(rng.gen())
+                ).unwrap()
+            )
+        }).collect();
+
+        rescue_hash(
+            cs.namespace(|| "Rescue_hash"),
+            &input_bits
+        ).unwrap();
+
+        assert!(cs.is_satisfied());
+    }
 }

@@ -29,8 +29,40 @@ pub fn rescue_hash<E, CS>(
 ) -> Result<Vec<Boolean>, SynthesisError>
     where E: Engine, CS: ConstraintSystem<E>
 {
-    assert!(input.len() % 8 == 0);
-    Ok(vec![])
+    let input_booleans = {
+        let mut data=input.to_vec();
+        while (data.len() % E::Fr::CAPACITY as usize)!=0{
+            data.push(Boolean::constant(false));
+        }
+        data
+    };
+    let input_expressions={
+        let mut data=vec![];
+        for (i,block) in input_booleans.chunks(E::Fr::CAPACITY as usize).enumerate(){
+            let field_element=AllocatedNum::<E>::pack_bits_to_element(cs.namespace(||format!("input_{}",i)),block)?;
+            data.push(Expression::from(&field_element));
+        }
+        data
+    };
+    let output_expressions=generate_rescue_hash(cs.namespace(||""),input_expressions)?;
+    let output_numbers = {
+        let mut data=vec![];
+        for (i,expr) in output_expressions.iter().enumerate(){
+            data.push(expr.into_number(cs.namespace(||format!("output_{}",i)))?);
+        }
+        data
+    };
+    let output_booleans = {
+        let mut data=vec![];
+        for (i,num) in output_numbers.iter().enumerate(){
+            let bits=num.into_bits_le(cs.namespace(||format!("output_{}",i)))?;
+            for bit in bits.iter().rev(){
+                data.push(bit.clone());
+            }
+        }
+        data
+    };
+    Ok(output_booleans)
 }
 
 pub fn generate_rescue_hash<E, CS>(
@@ -41,9 +73,9 @@ pub fn generate_rescue_hash<E, CS>(
 {
     //maybe, this value will be calculated
     //but it is constant for the algorithm
-    let m_vecsize=7 as usize;
+    let m_vecsize = 7 as usize;
     let key_size={
-        let mut n=(E::Fr::CAPACITY/2+1) as usize;
+        let mut n=(E::Fr::NUM_BITS/2+1) as usize;
         if n<10 {n=10}
         n*2+1
     };

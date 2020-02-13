@@ -25,6 +25,16 @@ use franklin_crypto::bellman::{
 
 pub fn rescue_hash<E, CS>(
     mut cs: CS,
+    input: &[Boolean]
+) -> Result<Vec<Boolean>, SynthesisError>
+    where E: Engine, CS: ConstraintSystem<E>
+{
+    assert!(input.len() % 8 == 0);
+    Ok(vec![])
+}
+
+pub fn generate_rescue_hash<E, CS>(
+    mut cs: CS,
     mut input: Vec<Expression<E>>
 ) -> Result<Vec<Expression<E>>, SynthesisError>
     where E: Engine, CS: ConstraintSystem<E>
@@ -52,12 +62,12 @@ pub fn rescue_hash<E, CS>(
         for k in block.chunks(m_vecsize).map(|a| a.to_vec()){
             key.push(k);
         }
-        hash=rescue_round_function(cs.namespace(||format!("processing_block_{}",i)), hash, &key, &alpha)?;
+        hash=generate_rescue_round_function(cs.namespace(||format!("processing_block_{}",i)), hash, &key, &alpha)?;
     }
     Ok(hash)
 }
 
-pub fn rescue_round_function<CS,E>(
+fn generate_rescue_round_function<CS,E>(
     mut cs: CS,
     initial_hash_value: Vec<Expression<E>>,
     input_as_key:&Vec<Vec<Expression<E>>>,
@@ -102,7 +112,7 @@ fn add_key<E:Engine>(
     }
     Ok(output)
 }
-fn get_mds_matrix<F:PrimeField>(m:usize)->Result<Vec<Vec<F>>,SynthesisError>{
+pub fn get_mds_matrix<F:PrimeField>(m:usize)->Result<Vec<Vec<F>>,SynthesisError>{
     //https://eprint.iacr.org/2019/458.pdf pages 9-10 contain the description
     let zero=ToBigInt::to_bigint(&0).unwrap();
     let p=prime_modulus::<F>();
@@ -112,7 +122,6 @@ fn get_mds_matrix<F:PrimeField>(m:usize)->Result<Vec<Vec<F>>,SynthesisError>{
         // m - log2(m) most significant bits are zero
         // This will satisfy
         let mut res=vec![];
-
         for i in 1..=m{
             res.push(ToBigInt::to_bigint(&i).unwrap());
         }
@@ -175,7 +184,7 @@ fn generate_mul_matrix_vector<CS,E>(
     Ok(output)
 }
 
-pub fn generate_powers<CS,E>(
+fn generate_powers<CS,E>(
     mut cs: CS,
     x: &AllocatedNum<E>,
     alpha: &E::Fr
@@ -208,7 +217,7 @@ pub fn generate_powers<CS,E>(
         };
         Ok(res) 
 }
-pub fn generate_roots<CS,E>(
+fn generate_roots<CS,E>(
     mut cs: CS,
     x: &AllocatedNum<E>,
     alpha: &E::Fr
@@ -271,7 +280,7 @@ pub fn generate_roots<CS,E>(
         };
         Ok(root) 
 }
-pub fn get_alpha<F:PrimeField>() -> F{
+fn get_alpha<F:PrimeField>() -> F{
     let zero=ToBigInt::to_bigint(&0).unwrap();
     let one=ToBigInt::to_bigint(&1).unwrap();
     let p_m_1=prime_modulus::<F>()-&one;
@@ -330,7 +339,7 @@ fn get_bits_be<F:PrimeField>(alpha:&F)->Vec<bool>{
     }
     res
 }
-fn prime_modulus<Fr: PrimeField>() -> BigInt {
+pub fn prime_modulus<Fr: PrimeField>() -> BigInt {
     let mut p_repr=Fr::char();
     p_repr.sub_noborrow(&Fr::one().into_repr());
     let p_field=Fr::from_repr(p_repr).unwrap();
@@ -345,7 +354,6 @@ fn fr_to_bigint<Fr: PrimeField>(fr: Fr) -> BigInt {
     let value = BigInt::from_bytes_be(Sign::Plus,&buffer);
     value
 }
-
 fn bigint_to_fr<F: PrimeField>(bigint: BigInt) -> Option<F> {
     F::from_str(&bigint.to_str_radix(10))
 }

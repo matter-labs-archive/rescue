@@ -22,23 +22,14 @@ use franklin_crypto::bellman::{
 
 pub fn rescue_hash<E, CS>(
     mut cs: CS,
-    input: &[Boolean]
-) -> Result<Vec<Boolean>, SynthesisError>
+    input: &[AllocatedNum<E>]
+) -> Result<Vec<AllocatedNum::<E>>, SynthesisError>
     where E: Engine, CS: ConstraintSystem<E>
 {
-    let input_booleans = {
-        let mut data=input.to_vec();
-        while (data.len() % E::Fr::CAPACITY as usize)!=0{
-            data.push(Boolean::constant(false));
-        }
-        data
-    };
     let input_expressions={
         let mut data=vec![];
-        for (i,block) in input_booleans.chunks(E::Fr::CAPACITY as usize).enumerate(){
-            let field_element=AllocatedNum::<E>::pack_bits_to_element(
-                cs.namespace(||format!("input_{}",i)),block)?;
-            data.push(Expression::from(&field_element));
+        for (i,field_element) in input.iter().enumerate(){
+            data.push(Expression::from(field_element));
         }
         data
     };
@@ -50,17 +41,7 @@ pub fn rescue_hash<E, CS>(
         }
         data
     };
-    let output_booleans = {
-        let mut data=vec![];
-        for (i,num) in output_numbers.iter().enumerate(){
-            let bits=num.into_bits_le(cs.namespace(||format!("output_bits_{}",i)))?;
-            for bit in bits.iter().rev(){
-                data.push(bit.clone());
-            }
-        }
-        data
-    };
-    Ok(output_booleans)
+    Ok(output_numbers)
 }
 
 pub fn generate_rescue_hash<E, CS>(
@@ -443,20 +424,14 @@ mod test {
         let mut rng = XorShiftRng::from_seed([0x5dbe6259, 0x8d313d76, 0x3237db17, 0xe5bc0654]);
 
         let mut cs = TestConstraintSystem::<Bn256>::new();
-        let input_bits: Vec<_> = (0..2048).map(|i| {
-            Boolean::from(
-                AllocatedBit::alloc(
-                    cs.namespace(|| format!("input bit {}", i)),
-                    Some(rng.gen())
-                ).unwrap()
-            )
+        let input: Vec<_> = (0..128).map(|i| {
+            AllocatedNum::alloc(
+                cs.namespace(|| format!("input number {}", i)),
+                || Ok(rng.gen())
+            ).unwrap()
         }).collect();
-
-        rescue_hash(
-            cs.namespace(|| "Rescue_hash"),
-            &input_bits
-        ).unwrap();
-
+        let hash=rescue_hash(cs.namespace(|| "Rescue_hash"),&input).unwrap();
+        assert_eq!(hash.len(),7);
         assert!(cs.is_satisfied());
     }
 }

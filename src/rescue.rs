@@ -3,9 +3,8 @@ extern crate franklin_crypto;
 extern crate rand;
 use num_bigint::{BigInt,ToBigInt,Sign};
 use franklin_crypto::circuit::{
-    boolean::*,
     num::*,
-    expression::Expression,
+    expression::*
 };
 use franklin_crypto::bellman::{
     ConstraintSystem, 
@@ -59,16 +58,18 @@ pub fn generate_rescue_hash<E, CS>(
         n*2+1
     };
 
-    while (input.len() % (key_size*m_vecsize)) != 0{
-        input.push(Expression::constant::<CS>(E::Fr::zero()));
+    let chunksize=key_size*m_vecsize;
+    let len_offs=input.len() % chunksize;
+    if len_offs != 0{
+        input.resize(input.len()+chunksize-len_offs,Expression::constant::<CS>(E::Fr::zero()));
     }
 
     // Maybe some initial vector will be needed
     let mut hash=vec![Expression::constant::<CS>(E::Fr::zero());m_vecsize];
 
     let alpha=get_alpha::<E::Fr>();
-    for (i,block) in input.chunks(key_size*m_vecsize).map(|a| a.to_vec()).enumerate(){
-        assert_eq!(block.len(),key_size*m_vecsize);
+    for (i,block) in input.chunks(chunksize).map(|a| a.to_vec()).enumerate(){
+        assert_eq!(block.len(),chunksize);
         let mut key=vec![];
         for k in block.chunks(m_vecsize).map(|a| a.to_vec()){
             key.push(k);
@@ -350,11 +351,6 @@ mod test {
         }
     };
     use super::*;
-    use franklin_crypto::circuit::{
-        boolean::*,
-        num::*,
-        expression::Expression,
-    };
     
     use rand::{XorShiftRng, SeedableRng, Rng};
 
